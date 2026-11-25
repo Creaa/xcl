@@ -34,8 +34,9 @@ MAX_BINARY = 1 << 20
 FRAMES_KEPT = 0.8   # the PR's frames at least this share of main's
 COMMIT_GROWTH = 1.25  # the PR's peak commit at most this times main's
 # the lines a smoke block needs to be compared with the other (the crash and device-removal
-# counts are checked where they are used), and those of them that are numbers
-SMOKE_FIELDS = ("title", "seconds", "frames shown")
+# counts are checked where they are used), and those of them that are numbers; `gpu` because
+# frames and memory of runs on two GPUs say nothing about each other (#2232)
+SMOKE_FIELDS = ("title", "seconds", "frames shown", "gpu")
 SMOKE_NUMBERS = ("seconds", "frames shown")
 
 
@@ -98,6 +99,11 @@ def section_has_content(body, section):
         if line and line not in TEMPLATE_PLACEHOLDERS:
             return True
     return False
+
+
+def gpu_name(block):
+    """The block's `gpu:` line, with case and runs of whitespace not counting (#2232)."""
+    return " ".join((block.get("gpu") or "").split()).casefold()
 
 
 def main_baseline(candidates, main_behind):
@@ -169,10 +175,15 @@ def check(body, head, files, is_main_ancestor, *, test_only=False, main_behind=N
             if pr.get("exit", "").startswith("killed"):
                 problems.append("the PR's regression run did not end by itself (killed)")
             if main:
-                m = main_baseline([b for b in main if b.get("title") == pr.get("title") and b.get("seconds") == pr.get("seconds")], main_behind)
+                same_run = [b for b in main if b.get("title") == pr.get("title") and b.get("seconds") == pr.get("seconds")]
+                m = main_baseline([b for b in same_run if gpu_name(b) == gpu_name(pr)], main_behind)
                 for b in [m] if m else main:
                     problems += field_problems(b, "the main")
-                if m is None:
+                if m is None and same_run and pr.get("gpu"):
+                    gpus = sorted({b.get("gpu") or "none" for b in same_run})
+                    problems.append(f"the main and PR regression runs are not on the same GPU ({pr.get('gpu')} against "
+                                    f"{', '.join(gpus)}): run both on one machine")
+                elif m is None:
                     problems.append("the main and PR regression runs are not of the same title for the same time")
                 else:
                     # an old baseline is named where the comparison fails, not only in the log
